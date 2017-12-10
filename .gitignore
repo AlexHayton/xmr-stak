@@ -17,3 +17,8 @@ config-debug.txt
 # KDevelop files
 .kdev4/
 xmr-stak.kdev4
+
+CMakeCache.txt
+Makefile
+cmake_install.cmake
+CMakeFiles/
