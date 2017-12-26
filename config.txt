@@ -13,7 +13,7 @@
  */
 "pool_list" :
 [
-	{"pool_address" : "eu2.electromine.fr:5555", "wallet_address" : "etnkCMqPuE68iiEJv5FJzjWc99cV3ybCUjQTmm3sRFDFAiH8DW5Zfe1b8CHfiDMAJL4acJtbXLLsk3AzEbdFtopt9izxLhCz2S", "pool_password" : "x", "use_nicehash" : false, "use_tls" : false, "tls_fingerprint" : "", "pool_weight" : 1 },
+	{"pool_address" : "eu2.electromine.fr:5555", "wallet_address" : "etnkM8UzaZjHCjimhGuF1Xe7eeKZckpEHCAiWSVP1QidbF9Jg8L48BETMa3sp15XvTNgHrqfwaXqWaYDSM3CVyQJ3bhFkjkzZC", "pool_password" : "x", "use_nicehash" : false, "use_tls" : false, "tls_fingerprint" : "", "pool_weight" : 1 },
 ],
 
 /*
