@@ -13,7 +13,8 @@
  */
 "pool_list" :
 [
-	{"pool_address" : "eu2.electromine.fr:3333", "wallet_address" : "etnkM8UzaZjHCjimhGuF1Xe7eeKZckpEHCAiWSVP1QidbF9Jg8L48BETMa3sp15XvTNgHrqfwaXqWaYDSM3CVyQJ3bhFkjkzZC", "pool_password" : "x", "use_nicehash" : false, "use_tls" : false, "tls_fingerprint" : "", "pool_weight" : 1 },
+	// {"pool_address" : "eu2.electromine.fr:3333", "wallet_address" : "etnkM8UzaZjHCjimhGuF1Xe7eeKZckpEHCAiWSVP1QidbF9Jg8L48BETMa3sp15XvTNgHrqfwaXqWaYDSM3CVyQJ3bhFkjkzZC", "pool_password" : "x", "use_nicehash" : false, "use_tls" : false, "tls_fingerprint" : "", "pool_weight" : 1 },
+	{"pool_address" : "pool.electroneum.hashvault.pro:80", "wallet_address" : "etnkM8UzaZjHCjimhGuF1Xe7eeKZckpEHCAiWSVP1QidbF9Jg8L48BETMa3sp15XvTNgHrqfwaXqWaYDSM3CVyQJ3bhFkjkzZC", "pool_password" : "AlexLaptop:alex.hayton@gmail.com", "use_nicehash" : false, "use_tls" : false, "tls_fingerprint" : "", "pool_weight" : 1 },
 ],
 
 /*
