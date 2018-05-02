@@ -23,3 +23,7 @@ Makefile
 cmake_install.cmake
 CMakeFiles/
 xmr-stak-dep/
+# Idea/Clion project files
+cmake-build-release/
+cmake-build-debug/
+\.idea/

@@ -14,6 +14,11 @@ R"===(
   * along with this program.  If not, see <http://www.gnu.org/licenses/>.
   */
 
+/* For Mesa clover support */
+#ifdef cl_clang_storage_class_specifiers
+#	pragma OPENCL EXTENSION cl_clang_storage_class_specifiers : enable
+#endif
+
 #ifdef cl_amd_media_ops
 #pragma OPENCL EXTENSION cl_amd_media_ops : enable
 #else
@@ -399,7 +404,7 @@ static const __constant uchar rcon[8] = { 0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x
 void AESExpandKey256(uint *keybuf)
 {
 	//#pragma unroll 4
-	for(uint c = 8, i = 1; c < 60; ++c)
+	for(uint c = 8, i = 1; c < 40; ++c)
 	{
 		// For 256-bit keys, an sbox permutation is done every other 4th uint generated, AND every 8th
 		uint t = ((!(c & 7)) || ((c & 7) == 4)) ? SubWord(keybuf[c - 1]) : keybuf[c - 1];
@@ -411,21 +416,37 @@ void AESExpandKey256(uint *keybuf)
 	}
 }
 
+#define MEM_CHUNK (1<<MEM_CHUNK_EXPONENT)
+
 #if(STRIDED_INDEX==0)
 #   define IDX(x)	(x)
-#else
+#elif(STRIDED_INDEX==1)
 #   define IDX(x)	((x) * (Threads))
+#elif(STRIDED_INDEX==2)
+#   define IDX(x)	(((x) % MEM_CHUNK) + ((x) / MEM_CHUNK) * WORKSIZE * MEM_CHUNK)
 #endif
 
+inline ulong getIdx()
+{
+#if(STRIDED_INDEX==0 || STRIDED_INDEX==1 || STRIDED_INDEX==2)
+	return get_global_id(0) - get_global_offset(0);
+#endif
+}
+
+#define mix_and_propagate(xin) (xin)[(get_local_id(1)) % 8][get_local_id(0)] ^ (xin)[(get_local_id(1) + 1) % 8][get_local_id(0)]
+		
+#define JOIN_DO(x,y) x##y
+#define JOIN(x,y) JOIN_DO(x,y)
+
 __attribute__((reqd_work_group_size(WORKSIZE, 8, 1)))
-__kernel void cn0(__global ulong *input, __global uint4 *Scratchpad, __global ulong *states, ulong Threads)
+__kernel void JOIN(cn0,ALGO)(__global ulong *input, __global uint4 *Scratchpad, __global ulong *states, ulong Threads)
 {
 	ulong State[25];
-	uint ExpandedKey1[256];
+	uint ExpandedKey1[40];
 	__local uint AES0[256], AES1[256], AES2[256], AES3[256];
 	uint4 text;
 
-	const ulong gIdx = get_global_id(0) - get_global_offset(0);
+	const ulong gIdx = getIdx();
 
 	for(int i = get_local_id(1) * WORKSIZE + get_local_id(0);
 		i < 256;
@@ -439,16 +460,20 @@ __kernel void cn0(__global ulong *input, __global uint4 *Scratchpad, __global ul
 	}
 
 	barrier(CLK_LOCAL_MEM_FENCE);
-
+		
+#if(COMP_MODE==1)
 	// do not use early return here
 	if(gIdx < Threads)
+#endif
 	{
 		states += 25 * gIdx;
 
 #if(STRIDED_INDEX==0)
-		Scratchpad += gIdx * (ITERATIONS >> 2);
-#else
+		Scratchpad += gIdx * (MEMORY >> 4);
+#elif(STRIDED_INDEX==1)
 		Scratchpad += gIdx;
+#elif(STRIDED_INDEX==2)
+		Scratchpad += get_group_id(0) * (MEMORY >> 4) * WORKSIZE + MEM_CHUNK * get_local_id(0);
 #endif
 
 		((ulong8 *)State)[0] = vload8(0, input);
@@ -470,9 +495,10 @@ __kernel void cn0(__global ulong *input, __global uint4 *Scratchpad, __global ul
 	}
 
 	mem_fence(CLK_GLOBAL_MEM_FENCE);
-
+#if(COMP_MODE==1)
 	// do not use early return here
 	if(gIdx < Threads)
+#endif
 	{
 		#pragma unroll
 		for(int i = 0; i < 25; ++i) states[i] = State[i];
@@ -486,12 +512,34 @@ __kernel void cn0(__global ulong *input, __global uint4 *Scratchpad, __global ul
 	}
 
 	mem_fence(CLK_LOCAL_MEM_FENCE);
+		
+// cryptonight_heavy
+#if (ALGO == 4)
+	__local uint4 xin[8][WORKSIZE];
 
+	/* Also left over threads performe this loop.
+	 * The left over thread results will be ignored
+	 */
+	for(size_t i=0; i < 16; i++)
+	{
+		#pragma unroll
+		for(int j = 0; j < 10; ++j)
+			text = AES_Round(AES0, AES1, AES2, AES3, text, ((uint4 *)ExpandedKey1)[j]);
+		barrier(CLK_LOCAL_MEM_FENCE);
+		xin[get_local_id(1)][get_local_id(0)] = text;
+		barrier(CLK_LOCAL_MEM_FENCE);
+		text = mix_and_propagate(xin);
+	}
+#endif
+
+#if(COMP_MODE==1)
 	// do not use early return here
 	if(gIdx < Threads)
+#endif
 	{
+
 		#pragma unroll 2
-		for(int i = 0; i < (ITERATIONS >> 5); ++i)
+		for(int i = 0; i < (MEMORY >> 7); ++i)
 		{
 			#pragma unroll
 			for(int j = 0; j < 10; ++j)
@@ -504,12 +552,17 @@ __kernel void cn0(__global ulong *input, __global uint4 *Scratchpad, __global ul
 }
 
 __attribute__((reqd_work_group_size(WORKSIZE, 1, 1)))
-__kernel void cn1(__global uint4 *Scratchpad, __global ulong *states, ulong Threads)
+__kernel void JOIN(cn1,ALGO) (__global uint4 *Scratchpad, __global ulong *states, ulong Threads
+// cryptonight_monero || cryptonight_aeon
+#if(ALGO == 3 || ALGO == 5)
+, __global ulong *input
+#endif
+)
 {
 	ulong a[2], b[2];
 	__local uint AES0[256], AES1[256], AES2[256], AES3[256];
 
-	const ulong gIdx = get_global_id(0) - get_global_offset(0);
+	const ulong gIdx = getIdx();
 
 	for(int i = get_local_id(0); i < 256; i += WORKSIZE)
 	{
@@ -521,17 +574,22 @@ __kernel void cn1(__global uint4 *Scratchpad, __global ulong *states, ulong Thre
 	}
 
 	barrier(CLK_LOCAL_MEM_FENCE);
-
+#if(ALGO == 3 || ALGO == 5)
+    uint2 tweak1_2;
+#endif
 	uint4 b_x;
-		
+#if(COMP_MODE==1)
 	// do not use early return here
 	if(gIdx < Threads)
+#endif
 	{
 		states += 25 * gIdx;
 #if(STRIDED_INDEX==0)
-		Scratchpad += gIdx * (ITERATIONS >> 2);
-#else
+		Scratchpad += gIdx * (MEMORY >> 4);
+#elif(STRIDED_INDEX==1)
 		Scratchpad += gIdx;
+#elif(STRIDED_INDEX==2)
+		Scratchpad += get_group_id(0) * (MEMORY >> 4) * WORKSIZE + MEM_CHUNK * get_local_id(0);
 #endif
 
 		a[0] = states[0] ^ states[4];
@@ -540,23 +598,39 @@ __kernel void cn1(__global uint4 *Scratchpad, __global ulong *states, ulong Thre
 		b[1] = states[3] ^ states[7];
 
 		b_x = ((uint4 *)b)[0];
+#if(ALGO == 3 || ALGO == 5)
+		tweak1_2 = as_uint2(input[4]);
+		tweak1_2.s0 >>= 24;
+		tweak1_2.s0 |= tweak1_2.s1 << 8;
+		tweak1_2.s1 = get_global_id(0);
+		tweak1_2 ^= as_uint2(states[24]);
+#endif
 	}
 
 	mem_fence(CLK_LOCAL_MEM_FENCE);
 
+#if(COMP_MODE==1)
 	// do not use early return here
 	if(gIdx < Threads)
+#endif
 	{
+		ulong idx0 = a[0];
+
 		#pragma unroll 8
 		for(int i = 0; i < ITERATIONS; ++i)
 		{
 			ulong c[2];
 
-			((uint4 *)c)[0] = Scratchpad[IDX((a[0] & MASK) >> 4)];
+			((uint4 *)c)[0] = Scratchpad[IDX((idx0 & MASK) >> 4)];
 			((uint4 *)c)[0] = AES_Round(AES0, AES1, AES2, AES3, ((uint4 *)c)[0], ((uint4 *)a)[0]);
-			//b_x ^= ((uint4 *)c)[0];
 
-			Scratchpad[IDX((a[0] & MASK) >> 4)] = b_x ^ ((uint4 *)c)[0];
+			b_x ^= ((uint4 *)c)[0];
+#if(ALGO == 3 || ALGO == 5)
+			uint table = 0x75310U;
+			uint index = ((b_x.s2 >> 26) & 12) | ((b_x.s2 >> 23) & 2);
+			b_x.s2 ^= ((table >> index) & 0x30U) << 24;
+#endif
+			Scratchpad[IDX((idx0 & MASK) >> 4)] = b_x;
 
 			uint4 tmp;
 			tmp = Scratchpad[IDX((c[0] & MASK) >> 4)];
@@ -564,25 +638,41 @@ __kernel void cn1(__global uint4 *Scratchpad, __global ulong *states, ulong Thre
 			a[1] += c[0] * as_ulong2(tmp).s0;
 			a[0] += mul_hi(c[0], as_ulong2(tmp).s0);
 
+
+#if(ALGO == 3 || ALGO == 5)
+			((uint2 *)&(a[1]))[0] ^= tweak1_2;
 			Scratchpad[IDX((c[0] & MASK) >> 4)] = ((uint4 *)a)[0];
+			((uint2 *)&(a[1]))[0] ^= tweak1_2;
+#else
+			Scratchpad[IDX((c[0] & MASK) >> 4)] = ((uint4 *)a)[0];
+#endif
 
 			((uint4 *)a)[0] ^= tmp;
+			idx0 = a[0];
 
 			b_x = ((uint4 *)c)[0];
+// cryptonight_heavy
+#if (ALGO == 4)
+			long n = *((__global long*)(Scratchpad + (IDX((idx0 & MASK) >> 4))));
+			int d = ((__global int*)(Scratchpad + (IDX((idx0 & MASK) >> 4))))[2];
+			long q = n / (d | 0x5);
+			*((__global long*)(Scratchpad + (IDX((idx0 & MASK) >> 4)))) = n ^ q;
+			idx0 = d ^ q;
+#endif
 		}
 	}
 	mem_fence(CLK_GLOBAL_MEM_FENCE);
 }
 
 __attribute__((reqd_work_group_size(WORKSIZE, 8, 1)))
-__kernel void cn2(__global uint4 *Scratchpad, __global ulong *states, __global uint *Branch0, __global uint *Branch1, __global uint *Branch2, __global uint *Branch3, ulong Threads)
+__kernel void JOIN(cn2,ALGO) (__global uint4 *Scratchpad, __global ulong *states, __global uint *Branch0, __global uint *Branch1, __global uint *Branch2, __global uint *Branch3, ulong Threads)
 {
 	__local uint AES0[256], AES1[256], AES2[256], AES3[256];
-	uint ExpandedKey2[256];
+	uint ExpandedKey2[40];
 	ulong State[25];
 	uint4 text;
 	
-	const ulong gIdx = get_global_id(0) - get_global_offset(0);
+	const ulong gIdx = getIdx();
 
 	for(int i = get_local_id(1) * WORKSIZE + get_local_id(0);
 		i < 256;
@@ -597,14 +687,18 @@ __kernel void cn2(__global uint4 *Scratchpad, __global ulong *states, __global u
 
 	barrier(CLK_LOCAL_MEM_FENCE);
 
+#if(COMP_MODE==1)
 	// do not use early return here
 	if(gIdx < Threads)
+#endif
 	{
 		states += 25 * gIdx;
 #if(STRIDED_INDEX==0)
-		Scratchpad += gIdx * (ITERATIONS >> 2);
-#else
+		Scratchpad += gIdx * (MEMORY >> 4);
+#elif(STRIDED_INDEX==1)
 		Scratchpad += gIdx;
+#elif(STRIDED_INDEX==2)
+		Scratchpad += get_group_id(0) * (MEMORY >> 4) * WORKSIZE + MEM_CHUNK * get_local_id(0);
 #endif
 
 		#if defined(__Tahiti__) || defined(__Pitcairn__)
@@ -624,26 +718,92 @@ __kernel void cn2(__global uint4 *Scratchpad, __global ulong *states, __global u
 
 	barrier(CLK_LOCAL_MEM_FENCE);
 
+#if (ALGO == 4)
+	__local uint4 xin[8][WORKSIZE];
+#endif
+
+#if(COMP_MODE==1)
 	// do not use early return here
 	if(gIdx < Threads)
+#endif
 	{
+#if (ALGO == 4)
 		#pragma unroll 2
-		for(int i = 0; i < (ITERATIONS >> 5); ++i)
+		for(int i = 0; i < (MEMORY >> 7); ++i)
 		{
 			text ^= Scratchpad[IDX((i << 3) + get_local_id(1))];
 
-			#pragma unroll
+			#pragma unroll 10
+			for(int j = 0; j < 10; ++j)
+				text = AES_Round(AES0, AES1, AES2, AES3, text, ((uint4 *)ExpandedKey2)[j]);
+
+
+			barrier(CLK_LOCAL_MEM_FENCE);
+			xin[get_local_id(1)][get_local_id(0)] = text;
+			barrier(CLK_LOCAL_MEM_FENCE);
+			text = mix_and_propagate(xin);
+		}
+
+		#pragma unroll 2
+		for(int i = 0; i < (MEMORY >> 7); ++i)
+		{
+			text ^= Scratchpad[IDX((i << 3) + get_local_id(1))];
+
+			#pragma unroll 10
+			for(int j = 0; j < 10; ++j)
+				text = AES_Round(AES0, AES1, AES2, AES3, text, ((uint4 *)ExpandedKey2)[j]);
+
+
+			barrier(CLK_LOCAL_MEM_FENCE);
+			xin[get_local_id(1)][get_local_id(0)] = text;
+			barrier(CLK_LOCAL_MEM_FENCE);
+			text = mix_and_propagate(xin);
+		}
+		
+#else
+		#pragma unroll 2
+		for(int i = 0; i < (MEMORY >> 7); ++i)
+		{
+			text ^= Scratchpad[IDX((i << 3) + get_local_id(1))];
+
+			#pragma unroll 10
 			for(int j = 0; j < 10; ++j)
 				text = AES_Round(AES0, AES1, AES2, AES3, text, ((uint4 *)ExpandedKey2)[j]);
 		}
+#endif
+	}
 
+// cryptonight_heavy
+#if (ALGO == 4)
+	/* Also left over threads perform this loop.
+	 * The left over thread results will be ignored
+	 */
+	for(size_t i=0; i < 16; i++)
+	{
+		#pragma unroll
+		for(int j = 0; j < 10; ++j)
+			text = AES_Round(AES0, AES1, AES2, AES3, text, ((uint4 *)ExpandedKey2)[j]);
+		barrier(CLK_LOCAL_MEM_FENCE);
+		xin[get_local_id(1)][get_local_id(0)] = text;
+		barrier(CLK_LOCAL_MEM_FENCE);
+		text = mix_and_propagate(xin);
+	}
+#endif
+
+#if(COMP_MODE==1)
+	// do not use early return here
+	if(gIdx < Threads)
+#endif
+	{
 		vstore2(as_ulong2(text), get_local_id(1) + 4, states);
 	}
 
 	barrier(CLK_GLOBAL_MEM_FENCE);
 
+#if(COMP_MODE==1)
 	// do not use early return here
 	if(gIdx < Threads)
+#endif
 	{
 		if(!get_local_id(1))
 		{
@@ -653,21 +813,11 @@ __kernel void cn2(__global uint4 *Scratchpad, __global ulong *states, __global u
 
 			for(int i = 0; i < 25; ++i) states[i] = State[i];
 
-			switch(State[0] & 3)
-			{
-				case 0:
-					Branch0[atomic_inc(Branch0 + Threads)] = get_global_id(0) - get_global_offset(0);
-					break;
-				case 1:
-					Branch1[atomic_inc(Branch1 + Threads)] = get_global_id(0) - get_global_offset(0);
-					break;
-				case 2:
-					Branch2[atomic_inc(Branch2 + Threads)] = get_global_id(0) - get_global_offset(0);
-					break;
-				case 3:
-					Branch3[atomic_inc(Branch3 + Threads)] = get_global_id(0) - get_global_offset(0);
-					break;
-			}
+			ulong StateSwitch = State[0] & 3;
+			__global uint *destinationBranch1 = StateSwitch == 0 ? Branch0 : Branch1;
+			__global uint *destinationBranch2 = StateSwitch == 2 ? Branch2 : Branch3;
+			__global uint *destinationBranch = StateSwitch < 2 ? destinationBranch1 : destinationBranch2;
+			destinationBranch[atomic_inc(destinationBranch + Threads)] = gIdx;
 		}
 	}
 	mem_fence(CLK_GLOBAL_MEM_FENCE);
@@ -704,8 +854,7 @@ __kernel void Skein(__global ulong *states, __global uint *BranchBuf, __global u
 
 		for(uint i = 0; i < 4; ++i)
 		{
-			if(i < 3) t[0] += 0x40UL;
-			else t[0] += 0x08UL;
+			t[0] += i < 3 ? 0x40UL : 0x08UL;
 
 			t[2] = t[0] ^ t[1];
 
@@ -715,8 +864,7 @@ __kernel void Skein(__global ulong *states, __global uint *BranchBuf, __global u
 
 			h = m ^ p;
 
-			if(i < 2) t[1] = 0x3000000000000000UL;
-			else t[1] = 0xB000000000000000UL;
+			t[1] = i < 2 ? 0x3000000000000000UL : 0xB000000000000000UL;
 		}
 
 		t[0] = 0x08UL;
@@ -744,6 +892,27 @@ __kernel void Skein(__global ulong *states, __global uint *BranchBuf, __global u
 
 #define SWAP8(x)	as_ulong(as_uchar8(x).s76543210)
 
+#define JHXOR \
+	h0h ^= input[0]; \
+	h0l ^= input[1]; \
+	h1h ^= input[2]; \
+	h1l ^= input[3]; \
+	h2h ^= input[4]; \
+	h2l ^= input[5]; \
+	h3h ^= input[6]; \
+	h3l ^= input[7]; \
+\
+	E8; \
+\
+	h4h ^= input[0]; \
+	h4l ^= input[1]; \
+	h5h ^= input[2]; \
+	h5l ^= input[3]; \
+	h6h ^= input[4]; \
+	h6l ^= input[5]; \
+	h7h ^= input[6]; \
+	h7l ^= input[7]
+
 __kernel void JH(__global ulong *states, __global uint *BranchBuf, __global uint *output, ulong Target, ulong Threads)
 {
 	const uint idx = get_global_id(0) - get_global_offset(0);
@@ -757,46 +926,27 @@ __kernel void JH(__global ulong *states, __global uint *BranchBuf, __global uint
 		sph_u64 h4h = 0x754D2E7F8996A371UL, h4l = 0x62E27DF70849141DUL, h5h = 0x948F2476F7957627UL, h5l = 0x6C29804757B6D587UL, h6h = 0x6C0D8EAC2D275E5CUL, h6l = 0x0F7A0557C6508451UL, h7h = 0xEA12247067D3E47BUL, h7l = 0x69D71CD313ABE389UL;
 		sph_u64 tmp;
 
-		for(int i = 0; i < 5; ++i)
+		for(int i = 0; i < 3; ++i)
 		{
 			ulong input[8];
 
-			if(i < 3)
-			{
-				for(int x = 0; x < 8; ++x) input[x] = (states[(i << 3) + x]);
-			}
-			else if(i == 3)
-			{
-				input[0] = (states[24]);
-				input[1] = 0x80UL;
-				for(int x = 2; x < 8; ++x) input[x] = 0x00UL;
-			}
-			else
-			{
-				input[7] = 0x4006000000000000UL;
-
-				for(int x = 0; x < 7; ++x) input[x] = 0x00UL;
-			}
-
-			h0h ^= input[0];
-			h0l ^= input[1];
-			h1h ^= input[2];
-			h1l ^= input[3];
-			h2h ^= input[4];
-			h2l ^= input[5];
-			h3h ^= input[6];
-			h3l ^= input[7];
-
-			E8;
-
-			h4h ^= input[0];
-			h4l ^= input[1];
-			h5h ^= input[2];
-			h5l ^= input[3];
-			h6h ^= input[4];
-			h6l ^= input[5];
-			h7h ^= input[6];
-			h7l ^= input[7];
+			const int shifted = i << 3;
+			for(int x = 0; x < 8; ++x) input[x] = (states[shifted + x]);
+			JHXOR;
+		}
+		{
+			ulong input[8];
+			input[0] = (states[24]);
+			input[1] = 0x80UL;
+			#pragma unroll 6
+			for(int x = 2; x < 8; ++x) input[x] = 0x00UL;
+			JHXOR;
+		}
+		{
+			ulong input[8];
+			for(int x = 0; x < 7; ++x) input[x] = 0x00UL;
+			input[7] = 0x4006000000000000UL;
+			JHXOR;
 		}
 
 		//output[0] = h6h;
@@ -832,6 +982,7 @@ __kernel void Blake(__global ulong *states, __global uint *BranchBuf, __global u
 
 		((uint8 *)h)[0] = vload8(0U, c_IV256);
 
+		#pragma unroll 4
 		for(uint i = 0, bitlen = 0; i < 4; ++i)
 		{
 			if(i < 3)
@@ -907,6 +1058,7 @@ __kernel void Groestl(__global ulong *states, __global uint *BranchBuf, __global
 
 		State[7] = 0x0001000000000000UL;
 
+		#pragma unroll 4
 		for(uint i = 0; i < 4; ++i)
 		{
 			ulong H[8], M[8];
