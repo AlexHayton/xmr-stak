@@ -15,7 +15,9 @@
  
 "pool_list" :
 [
-	{"pool_address" : "pool.supportxmr.com:5555", "wallet_address" : "4AsdADP9nZg3eAZgCwLHSQGM6WHqF9LmSiAP8M65X3VJSz1yedw9ddPGsimqQsskc3SQCaKQ8Av57AsRngTGSM3JPGCieuR", "rig_id" : "osx", "pool_password" : "osx:alex.hayton@gmail.com", "use_nicehash" : false, "use_tls" : false, "tls_fingerprint" : "", "pool_weight" : 1 },
+	// {"pool_address" : "pool.supportxmr.com:5555", "wallet_address" : "4AsdADP9nZg3eAZgCwLHSQGM6WHqF9LmSiAP8M65X3VJSz1yedw9ddPGsimqQsskc3SQCaKQ8Av57AsRngTGSM3JPGCieuR", "rig_id" : "osx", "pool_password" : "osx:alex.hayton@gmail.com", "use_nicehash" : false, "use_tls" : false, "tls_fingerprint" : "", "pool_weight" : 1 },
+	{"pool_address" : "pool.electroneum.hashvault.pro:80", "wallet_address" : "etnkM8UzaZjHCjimhGuF1Xe7eeKZckpEHCAiWSVP1QidbF9Jg8L48BETMa3sp15XvTNgHrqfwaXqWaYDSM3CVyQJ3bhFkjkzZC", "rig_id": "osx", "pool_password" : "AlexLaptop:alex.hayton@gmail.com", "use_nicehash" : false, "use_tls" : false, "tls_fingerprint" : "", "pool_weight" : 1 },
+
 ],
 
 /*
