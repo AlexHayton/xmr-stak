@@ -1,4 +1,5 @@
 
+
 /*
  * pool_address    - Pool address should be in the form "pool.supportxmr.com:3333". Only stratum pools are supported.
  * wallet_address  - Your wallet, or pool login.
